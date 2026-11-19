@@ -83,6 +83,9 @@ export function AskCopper({
   const [chats, setChats] = useState<Chats>({ tools: [], noTools: [] });
   const [draft, setDraft] = useState("");
   const body = useRef<HTMLDivElement>(null);
+  // Module 5: one id per chat, so its turns group into a Langfuse session.
+  // Made on the first message, not while the page is prerendered.
+  const sessionId = useRef<string | null>(null);
 
   const key = useTools ? "tools" : "noTools";
   const turns = chats[key];
@@ -149,9 +152,11 @@ export function AskCopper({
       [chat]: [...all[chat], { question, progress: WORKING, note }],
     }));
     try {
+      sessionId.current ??= crypto.randomUUID();
       const { progress } = await askCopper({
         messages,
         useTools: chat === "tools",
+        sessionId: sessionId.current,
         // Module 4: the console's desk, and who is talking. A console note
         // always goes to the Refund agent.
         ...(support && {

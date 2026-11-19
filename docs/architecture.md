@@ -171,3 +171,37 @@ the tests and a golden-set evaluation with an AI judge run in GitHub Actions
 on every pull request, with `main` protected; every AI call is traced in
 Langfuse; and one support agent that does everything is compared with the two
 agents on the same golden set. Langfuse is the only eval and monitoring tool.
+
+## Module 5 part 2: Tracing in Langfuse
+
+**Summary:** Every AI call is traced in Langfuse: which agent answered, each
+tool call with what went in and came out, and each model call's tokens, cost
+and time. Each Ask Copper turn is one trace, and turns from the same chat
+group into one Langfuse session. Tracing is on only when the Langfuse keys are
+set; without them the app (and CI) runs exactly as before and sends nothing.
+
+| Piece | Where | What it does |
+| --- | --- | --- |
+| Tracing setup | `lib/ai/tracing.ts`, `instrumentation.ts` | `startTracing()` registers Langfuse's span processor (`@langfuse/otel`, OpenTelemetry) and the AI SDK 7 integration (`@langfuse/vercel-ai-sdk`). Next.js calls it once at server start. `flushTracing()` waits until the spans have reached Langfuse |
+| Call names | `lib/ai/call.ts` (`telemetryFor`) | Every call is named for its feature (`ask-copper`, `refund-agent`, `search-docs`) and carries its module as metadata |
+| One trace per turn | `lib/copper/assistant/ask.ts` | An "Ask Copper" span (the question, the reply, who answered, handoffs, tool calls) holds one agent span per agent that answered ("Copper", "Refund agent"), and each holds its model calls and tool calls. Flushed with `after()` once the reply has streamed |
+| Sessions | `components/copper/ask-copper.tsx` | The panel makes one id per chat on its first message and sends it with every turn |
+| Prices | `lib/ai/langfuse-models.ts`, `npm run langfuse:models` | Saves each approved Gemini model's price (from `lib/ai/pricing.ts`) in the Langfuse project, so Langfuse's costs match the `[ai_calls]` log |
+| Env vars | `.env.local`, Vercel | `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_BASE_URL` |
+
+**Data flow:** question → `askCopper` opens the trace → agent span → AI SDK
+reports each model call and tool call to the Langfuse integration →
+`LangfuseSpanProcessor` sends the spans to Langfuse as each one ends →
+Langfuse prices each model call from its tokens and model name.
+
+**Decisions and trade-offs:** Langfuse reads the AI SDK's standard OpenTelemetry
+spans, so no AI call needed rewriting, only a name. Spans are sent one by one
+("immediate" export) rather than in batches, because on Vercel the function
+can freeze soon after the reply. Prices are set in Langfuse from the app's own
+price list, since Langfuse may not know every Gemini preview model.
+
+**Risks and open questions:** Traces hold what customers typed and what
+Copper answered, so the Langfuse project needs the same care as the chat. If
+Langfuse is down, the chat still works; those turns just aren't traced.
+`npm run embed-docs` runs outside Next.js and isn't traced; scripts that
+should be (like the evals) call `startTracing()` and `flushTracing()`.
