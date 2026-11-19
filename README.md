@@ -47,6 +47,7 @@ They're optional until a module needs them. Put them in `.env.local` (never comm
 | `npm run start-module`               | One-time setup after cloning a module branch          |
 | `npm run env:check`                  | List the variables in `.env.local`, values masked     |
 | `npm run embed-docs`                 | Re-embed the PDFs in `public/docs/` after they change |
+| `npm run langfuse:models`            | Module 5: save the Gemini prices in Langfuse (once)   |
 
 ## AI coding agents
 

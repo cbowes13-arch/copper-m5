@@ -13,6 +13,8 @@ import { costUsd } from "@/lib/ai/pricing";
 // Every model call in the app goes through this file, so each one is logged
 // with its tokens, cost and how long it took. The log goes to the terminal
 // running the app, as a line starting "[ai_calls]".
+// Module 5: each call is also named for Langfuse (lib/ai/tracing.ts), by its
+// feature and module, so traces show which part of the app made it.
 
 export class AiNotConfiguredError extends Error {
   constructor() {
@@ -71,6 +73,21 @@ async function logCall(row: AiCallRow): Promise<void> {
   console.info("[ai_calls]", JSON.stringify(row));
 }
 
+/**
+ * Names the call in Langfuse traces: functionId is the feature (like
+ * "ask-copper" or "refund-agent"); module and feature become its metadata.
+ * Does nothing when tracing is off.
+ */
+export function telemetryFor(info: Omit<CallInfo, "model">) {
+  return {
+    runtimeContext: { module: info.module, feature: info.feature },
+    telemetry: {
+      functionId: info.feature,
+      includeRuntimeContext: { module: true, feature: true },
+    },
+  };
+}
+
 type Usage = { inputTokens?: number; outputTokens?: number };
 
 /** Builds the ai_calls row for a call that started at `started`. */
@@ -114,7 +131,11 @@ async function tracked<T extends { usage: Usage }>(
 /** Generates text. Example: callText({ module: 3, feature: "support-answer" }, { prompt }) */
 export async function callText(info: CallInfo, options: TextOptions) {
   return tracked(info, (model) =>
-    generateText({ ...options, model: languageModel(model) }),
+    generateText({
+      ...options,
+      ...telemetryFor(info),
+      model: languageModel(model),
+    }),
   );
 }
 
@@ -127,6 +148,7 @@ export async function callObject<Schema extends z.ZodType>(
   const result = await tracked(info, (model) =>
     generateText({
       ...rest,
+      ...telemetryFor(info),
       model: languageModel(model),
       output: Output.object({ schema }),
     }),
@@ -162,6 +184,7 @@ export async function callEmbedMany(
     const result = await embedMany({
       model: google().embedding(EMBEDDING_MODEL.slice("google/".length)),
       values,
+      ...telemetryFor(info),
       providerOptions: {
         google: { outputDimensionality: EMBEDDING_DIMENSIONS },
       },
@@ -189,6 +212,7 @@ export function callStream(info: CallInfo, options: StreamOptions) {
   const row = rowFor(info, model, performance.now());
   return streamText({
     ...options,
+    ...telemetryFor(info),
     model: languageModel(model),
     onFinish: ({ totalUsage }) => logCall(row(true, totalUsage)),
     onError: () => logCall(row(false)),
