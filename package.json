@@ -12,6 +12,8 @@
     "lint": "eslint",
     "typecheck": "next typegen && tsc --noEmit",
     "test": "vitest run",
+    "eval": "node scripts/eval.mjs",
+    "eval:single": "node scripts/eval.mjs --agents=one",
     "format": "prettier --write .",
     "start-module": "node scripts/start-module.mjs",
     "env:check": "node scripts/check-env.mjs",
@@ -21,6 +23,7 @@
   "dependencies": {
     "@ai-sdk/google": "4.0.93",
     "@hookform/resolvers": "5.9.1",
+    "@langfuse/client": "6.1.1",
     "@langfuse/otel": "6.1.1",
     "@langfuse/tracing": "6.1.1",
     "@langfuse/vercel-ai-sdk": "6.1.1",

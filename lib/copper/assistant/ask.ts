@@ -23,6 +23,7 @@ import {
   COPPER_HANDOFF,
   COPPER_INSTRUCTIONS,
   REFUND_AGENT_INSTRUCTIONS,
+  SUPPORT_AGENT_INSTRUCTIONS,
 } from "@/lib/copper/assistant/instructions";
 import {
   type Agent,
@@ -33,6 +34,7 @@ import {
 import {
   copperTools,
   refundAgentTools,
+  supportAgentTools,
   transferToRefundAgent,
 } from "@/lib/copper/assistant/tools";
 import type { Desk } from "@/lib/copper/orders";
@@ -48,7 +50,14 @@ export type AskCopperRequest = {
   agent?: Agent;
   /** Groups a chat's turns into one Langfuse session (Module 5). */
   sessionId?: string;
+  /**
+   * Module 5, Part 4: "two" (the default) is Copper plus the Refund agent;
+   * "one" is a single support agent with every tool and no handoff.
+   */
+  agents?: AgentSetup;
 };
+
+export type AgentSetup = "two" | "one";
 
 export type AskCopperResult = { progress: Live<Progress> };
 
@@ -73,6 +82,17 @@ const SORRY = "Sorry, something went wrong on my end. Please try again.";
 
 /** One agent's call: its instructions and only its own tools. */
 function agentCall(agent: Agent, messages: ChatMessage[], desk?: Desk) {
+  if (agent === "support" && desk)
+    return callStream(
+      { module: 5, feature: "support-agent" },
+      {
+        messages,
+        providerOptions: THOUGHT_SUMMARIES,
+        instructions: SUPPORT_AGENT_INSTRUCTIONS,
+        tools: supportAgentTools(desk),
+        stopWhen: STOP,
+      },
+    );
   if (agent === "refund" && desk)
     return callStream(
       { module: 4, feature: "refund-agent" },
@@ -106,9 +126,19 @@ export async function askCopper({
   desk,
   agent = "copper",
   sessionId,
+  agents = "two",
 }: AskCopperRequest): Promise<AskCopperResult> {
   const { live, update, done } = createLive<Progress>();
-  const first: Agent = desk && useTools ? agent : "copper";
+  // One agent answers everything on the Support page; two agents start
+  // with whoever ended the last turn.
+  const first: Agent =
+    desk && useTools
+      ? agents === "one"
+        ? "support"
+        : agent === "support"
+          ? "copper"
+          : agent
+      : "copper";
   const progress: Progress = {
     steps: [],
     reply: "",
@@ -247,7 +277,11 @@ export async function askCopper({
     {
       traceName: "ask-copper",
       sessionId,
-      tags: [desk ? "support-page" : "site", useTools ? "tools" : "no-tools"],
+      tags: [
+        desk ? "support-page" : "site",
+        useTools ? "tools" : "no-tools",
+        agents === "one" ? "one-agent" : "two-agents",
+      ],
     },
     () =>
       startActiveObservation("Ask Copper", async (span) => {

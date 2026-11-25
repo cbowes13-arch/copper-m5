@@ -205,3 +205,79 @@ Copper answered, so the Langfuse project needs the same care as the chat. If
 Langfuse is down, the chat still works; those turns just aren't traced.
 `npm run embed-docs` runs outside Next.js and isn't traced; scripts that
 should be (like the evals) call `startTracing()` and `flushTracing()`.
+
+## Module 5 part 3: Golden set and AI judge
+
+**Summary:** A golden set of six questions (pricing, documents, refunds under
+and over the limit, a fake "manager approved it" request, and an off-topic
+request) is asked of Ask Copper on every pull request. A second Gemini model
+grades each answer from 1 to 5 against a reference answer (LLM-as-a-judge),
+and a code check confirms the right tools were used. The run is a Langfuse
+experiment on the `ask-copper-golden-set` dataset, so every run's scores and
+traces sit side by side in Langfuse. The check fails, and `main` stays
+protected, when fewer than 80% of answers pass.
+
+| Piece | Where | What it does |
+| --- | --- | --- |
+| Golden set | `lib/copper/evals/golden-set.ts` | Each question, which page it's asked on, a reference answer for the judge, and the tools a good answer uses |
+| Judge | `lib/copper/evals/judge.ts` | `judge()` calls `callObject` with `{ module: 5, feature: "eval-judge", model: "google/gemini-3.5-flash-lite" }`: a different model from the one answering. Scores `judge-score` (1-5) and `judge-pass` (4 or more). `right-tools` is the free code check |
+| Runner | `lib/copper/evals/run.ts` | Saves the golden set as a Langfuse dataset (upserting by id, archiving removed items), asks each question through `askCopper` exactly as the chat does (a fresh Refund Console for Support-page questions), and runs it as a Langfuse experiment with the judge and tools check as evaluators. Run scores: `pass-rate`, `average-judge-score` |
+| Command | `scripts/eval.mjs`, `npm run eval` | Checks the keys, starts tracing (environment `eval`, or `ci`), runs the golden set, prints a report (and writes it to the GitHub job summary), and exits with an error below the bar |
+| CI | `.github/workflows/eval.yml` | The `golden-set` check, on pull requests only. Keys come from the repo's Actions secrets. The report goes in the check's summary and in a comment on the pull request. A required check on `main` |
+
+**Data flow:** pull request → `golden-set` job → golden set saved to the
+Langfuse dataset → each question → `askCopper` → Copper (and the Refund agent)
+→ reply and tool calls → judge (Gemini) and tools check → item scores in
+Langfuse → pass rate → the check passes or fails → branch protection allows or
+blocks the merge.
+
+**Decisions and trade-offs:** The judge runs in our code, through
+`lib/ai/call.ts`, rather than as a Langfuse-managed evaluator: CI can wait for
+its scores, every call is logged and traced like the app's, and the Gemini key
+stays out of Langfuse. Langfuse still keeps the dataset, runs, traces and
+scores. The judge sees each tool's result, so it can check numbers against the
+truth instead of trusting the reply. A different, cheaper model judges, so it
+isn't grading itself. The set is small, and the job runs on pull requests only
+(newer pushes cancel older runs), because each run costs about 15 Gemini
+requests and the free tier allows about 20 a day per model.
+
+**Risks and open questions:** An AI judge can be wrong or inconsistent; read
+the "Why" column before trusting a failure, and add a question when a real
+mistake slips through. Gemini answers vary, so a borderline answer can pass one
+run and fail the next. A run that hits the free tier's daily limit fails the
+check; wait for the quota to reset, or re-run the job. Six questions can't
+cover everything Copper does.
+
+## Module 5 part 4: One support agent vs two agents
+
+**Summary:** A single support agent does everything the two agents do, with
+no handoff: Copper's instructions plus the Refund agent's refund rules, and
+every tool except the two transfer tools. The same golden set and judge run on
+both, and each run records its pass rate, cost per answer and seconds per
+answer, as scores in Langfuse and in the report. The app still ships the two
+agents; the single agent exists to compare.
+
+| Piece | Where | What it does |
+| --- | --- | --- |
+| Single agent | `lib/copper/assistant/instructions.ts` (`SUPPORT_AGENT_INSTRUCTIONS`), `tools.ts` (`supportAgentTools`), `progress.ts` (`"support"`, "Support agent") | One agent, all the tools, no handoff. AI call `{ module: 5, feature: "support-agent" }` |
+| Switch | `lib/copper/assistant/ask.ts` | `askCopper({ agents: "one" })` uses the single agent on the Support page; `"two"` (the default) is Copper and the Refund agent. Traces are tagged `one-agent` or `two-agents`. Site-page questions have no refunds, so Copper answers them in both setups |
+| Cost and speed | `lib/ai/call.ts` (`watchAiCalls`), `lib/copper/evals/run.ts` | Each answer adds up the cost of its own ai_calls rows (not the judge's) and times itself. Run scores: `cost-per-answer-usd`, `seconds-per-answer` |
+| Commands | `npm run eval` (two agents, also in CI), `npm run eval:single` (one agent); or Actions > Eval > Run workflow with `one` | Both runs land in the same Langfuse dataset, named "two agents: …" and "one agent: …" |
+
+**Data flow:** the same golden set → `askCopper({ agents })` → one agent, or
+Copper → handoff → Refund agent → the same judge and tools check → pass rate,
+cost and speed per run → compare in Langfuse (Datasets >
+ask-copper-golden-set > Runs).
+
+**Decisions and trade-offs:** The single agent reuses the two agents'
+instructions word for word, so the comparison measures the handoff and not
+better wording. The golden set says what must happen (for example,
+`request_refund` is called), not which agent does it, so both setups are
+graded the same way. A handoff costs an extra model call on every refund, so
+the single agent is expected to be cheaper and faster there; the two agents
+keep refund tools away from the agent that answers everything else.
+
+**Risks and open questions:** Six questions and one run each is a small
+sample: Gemini answers vary, so run each setup more than once before trusting
+a small difference. The single agent has more tools and longer instructions,
+so its cost per call is higher even where it saves a call.

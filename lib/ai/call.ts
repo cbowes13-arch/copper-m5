@@ -68,9 +68,22 @@ function languageModel(model: ModelId) {
   return google()(id);
 }
 
+type AiCallWatcher = (row: AiCallRow) => void;
+const watchers = new Set<AiCallWatcher>();
+
+/**
+ * Calls `watcher` with every ai_calls row until the returned function is
+ * called. The evals use it to add up each answer's cost (Module 5).
+ */
+export function watchAiCalls(watcher: AiCallWatcher): () => void {
+  watchers.add(watcher);
+  return () => watchers.delete(watcher);
+}
+
 /** Prints one line per model call, so the cost and time are visible. */
 async function logCall(row: AiCallRow): Promise<void> {
   console.info("[ai_calls]", JSON.stringify(row));
+  for (const watcher of watchers) watcher(row);
 }
 
 /**
