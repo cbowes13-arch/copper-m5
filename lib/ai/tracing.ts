@@ -43,7 +43,11 @@ export function startTracing({
   const processor = new LangfuseSpanProcessor({
     exporter,
     exportMode: "immediate",
-    environment: process.env.VERCEL_ENV ?? process.env.NODE_ENV,
+    // Lets Langfuse filter real chats from eval runs ("eval", "ci").
+    environment:
+      process.env.LANGFUSE_TRACING_ENVIRONMENT ??
+      process.env.VERCEL_ENV ??
+      process.env.NODE_ENV,
   });
   new NodeTracerProvider({
     // Names the app in each trace, instead of "unknown_service".

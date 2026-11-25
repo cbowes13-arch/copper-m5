@@ -1,0 +1,67 @@
+name: Eval
+
+# Module 5: on every pull request, ask Ask Copper the golden set
+# (lib/copper/evals/golden-set.ts), have the AI judge grade each answer, and
+# keep the scores in Langfuse. The scores show in the check's summary and in a
+# comment on the pull request. The check fails when too few answers pass, and
+# branch protection then blocks the merge.
+# It uses real Gemini requests (about 15-20 a run), so it runs on pull
+# requests only, not on every push. Its own file (rather than a job in ci.yml)
+# means no skipped "golden-set" check from a push run can count as a pass.
+# Part 4: run it by hand (Actions > Eval > Run workflow) with "one" to grade
+# the single support agent on the same golden set.
+# Needs these repository secrets (Settings > Secrets and variables > Actions):
+# GOOGLE_GENERATIVE_AI_API_KEY, LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY,
+# LANGFUSE_BASE_URL, and optionally AI_MODEL.
+
+on:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      agents:
+        description: "Which Ask Copper: two (Copper + Refund agent) or one (single support agent)"
+        type: choice
+        options: [two, one]
+        default: two
+
+# A newer push to the same pull request cancels the older run, so a burst of
+# pushes spends Gemini requests only once.
+concurrency:
+  group: eval-${{ github.event.pull_request.number || github.ref }}-${{ inputs.agents || 'two' }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  golden-set:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - run: npm run eval
+        env:
+          GOOGLE_GENERATIVE_AI_API_KEY: ${{ secrets.GOOGLE_GENERATIVE_AI_API_KEY }}
+          AI_MODEL: ${{ secrets.AI_MODEL }}
+          LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY }}
+          LANGFUSE_SECRET_KEY: ${{ secrets.LANGFUSE_SECRET_KEY }}
+          LANGFUSE_BASE_URL: ${{ secrets.LANGFUSE_BASE_URL }}
+          LANGFUSE_TRACING_ENVIRONMENT: ci
+          EVAL_AGENTS: ${{ inputs.agents || 'two' }}
+          EVAL_PR_NUMBER: ${{ github.event.pull_request.number }}
+          EVAL_REPORT_FILE: eval-report.md
+      # Put the scores on the pull request itself, updating one comment
+      # instead of adding a new one on every push. Runs even when the eval
+      # fails, so a failing score is just as easy to read.
+      - name: Post the scores on the pull request
+        if: always() && github.event_name == 'pull_request' && hashFiles('eval-report.md') != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: gh pr comment "$PR" --edit-last --create-if-none --body-file eval-report.md
